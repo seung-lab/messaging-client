@@ -25,16 +25,20 @@ class MessagingClient:
         return future.result(timeout=timeout)
 
     def consume(self, queue: str, callback: Callable = None):
-        def _print(payload):
-            print(payload.data)
-            payload.ack()
-
         if callback is None:
             callback = _print
 
+        def _print(payload):
+            print(payload.data)
+
+        def callback_wrapper(payload):
+            """Call user callback and send acknowledge."""
+            callback(payload)
+            payload.ack()
+
         subscription_name = f"projects/{PROJECT_NAME}/subscriptions/{queue}"
         with pubsub_v1.SubscriberClient() as subscriber:
-            future = subscriber.subscribe(subscription_name, callback)
+            future = subscriber.subscribe(subscription_name, callback_wrapper)
             try:
                 future.result()
             except KeyboardInterrupt:
