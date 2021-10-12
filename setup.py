@@ -1,12 +1,11 @@
-import re
 import os
+import re
 import codecs
-from setuptools import setup, find_packages
-
-here = os.path.abspath(os.path.dirname(__file__))
+import setuptools
 
 
 def read(*parts):
+    here = os.path.abspath(os.path.dirname(__file__))
     with codecs.open(os.path.join(here, *parts), "r") as fp:
         return fp.read()
 
@@ -19,38 +18,27 @@ def find_version(*file_paths):
     raise RuntimeError("Unable to find version string.")
 
 
-with open("README.md", "r") as fh:
+with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-with open("requirements.txt", "r") as f:
-    required = f.read().splitlines()
-
-dependency_links = []
-del_ls = []
-for i_l in range(len(required)):
-    l = required[i_l]
-    if l.startswith("-e"):
-        dependency_links.append(l.split("-e ")[-1])
-        del_ls.append(i_l)
-
-        required.append(l.split("=")[-1])
-
-for i_l in del_ls[::-1]:
-    del required[i_l]
-
-setup(
-    name="Messaging Client",
+setuptools.setup(
+    name="messagingclient",
     version=find_version("messagingclient", "__init__.py"),
+    author="Akhilesh Halageri",
     description="Messging Client",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/seung-lab/messaging-client",
-    packages=find_packages(),
-    install_requires=required,
-    dependency_links=dependency_links,
+    project_urls={
+        "Bug Tracker": "https://github.com/seung-lab/messaging-client/issues",
+    },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
-        "Operating System :: POSIX :: Linux",
+        "Operating System :: OS Independent",
     ],
+    package_dir={"messagingclient": "messagingclient"},
+    packages=setuptools.find_packages(),
+    install_requires=["numpy", "google-cloud-pubsub"],
+    python_requires=">=3.6",
 )
