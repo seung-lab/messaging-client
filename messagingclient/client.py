@@ -24,7 +24,7 @@ class MessagingClient:
         future = publisher.publish(topic_name, payload, **attributes)
         return future.result(timeout=timeout)
 
-    def consume(self, queue: str, callback: Callable = None):
+    def consume(self, queue: str, callback: Callable = None, max_messages: int = 1):
         if callback is None:
             callback = _print
 
@@ -36,11 +36,15 @@ class MessagingClient:
             callback(payload)
             payload.ack()
 
+        flow_control = pubsub_v1.types.FlowControl(max_messages=max_messages)
         subscription_name = f"projects/{PROJECT_NAME}/subscriptions/{queue}"
         with pubsub_v1.SubscriberClient() as subscriber:
-            future = subscriber.subscribe(subscription_name, callback_wrapper)
+            future = subscriber.subscribe(
+                subscription_name, callback_wrapper, flow_control=flow_control
+            )
             try:
                 future.result()
-            except KeyboardInterrupt:
+            except Exception:
+                # terminate on any exception so that the worker isn't hung.
                 future.cancel()
                 print("stopped listening")
