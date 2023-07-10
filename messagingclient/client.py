@@ -44,7 +44,7 @@ class MessagingClient:
             )
             try:
                 future.result()
-            except Exception:
+            except Exception as exc:
                 # terminate on any exception so that the worker isn't hung.
                 future.cancel()
-                print("stopped listening")
+                print(f"stopped listening: {exc}")
