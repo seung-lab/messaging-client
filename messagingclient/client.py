@@ -27,6 +27,8 @@ class MessagingClient:
         return future.result(timeout=timeout)
 
     def consume(self, queue: str, callback: Callable = None, max_messages: int = 1):
+        print("MessagingClient.consume()")
+
         if callback is None:
             callback = _print
 
@@ -35,6 +37,7 @@ class MessagingClient:
 
         def callback_wrapper(payload):
             """Call user callback and send acknowledge."""
+            print("MessagingClient.consume().callback_wrapper()")
             callback(payload)
             payload.ack()
 
@@ -64,6 +67,7 @@ class MessagingClient:
         Refs:
         https://cloud.google.com/pubsub/docs/pull
         '''
+        print("MessagingClient.consume_multiple()")
 
         if isinstance(queues, str):
             return self.consume(queues, callback, max_messages)
@@ -78,6 +82,7 @@ class MessagingClient:
 
         def callback_wrapper(payload):
             """Call user callback and send acknowledge."""
+            print("MessagingClient.consume_multiple().callback_wrapper()")
             callback(payload)
             payload.ack()
 
