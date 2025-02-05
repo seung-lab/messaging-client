@@ -68,6 +68,7 @@ class MessagingClient:
         https://cloud.google.com/pubsub/docs/pull
         '''
         print("MessagingClient.consume_multiple()")
+        print("MessagingClient.consume_multiple() queues:", queues)
 
         if isinstance(queues, str):
             return self.consume(queues, callback, max_messages)
