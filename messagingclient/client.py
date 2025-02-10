@@ -1,3 +1,4 @@
+import logging
 import time
 from typing import Any
 from typing import Union, List
@@ -27,8 +28,7 @@ class MessagingClient:
         return future.result(timeout=timeout)
 
     def consume(self, queue: str, callback: Callable = None, max_messages: int = 1):
-        print("MessagingClient.consume()")
-
+        
         if callback is None:
             callback = _print
 
@@ -36,8 +36,8 @@ class MessagingClient:
             print(payload.data)
 
         def callback_wrapper(payload):
-            """Call user callback and send acknowledge."""
-            print("MessagingClient.consume().callback_wrapper()")
+            """Call user callback and send acknowledge."""]
+            logging.info(f"MessagingClient.consume().callback_wrapper() Received message: {payload}.")
             callback(payload)
             payload.ack()
 
@@ -52,7 +52,7 @@ class MessagingClient:
             except Exception as exc:
                 # terminate on any exception so that the worker isn't hung.
                 future.cancel()
-                print(f"stopped listening: {exc}")
+                logging.info(f"MessagingClient.consume() Exception (will stop listening now): {exc}")
 
     def consume_multiple(self, queues: Union[str, List], callback: Callable = None, max_messages: int = 1):
         '''
@@ -67,9 +67,7 @@ class MessagingClient:
         Refs:
         https://cloud.google.com/pubsub/docs/pull
         '''
-        print("MessagingClient.consume_multiple()")
-        print("MessagingClient.consume_multiple() queues:", queues)
-
+        
         if isinstance(queues, str):
             return self.consume(queues, callback, max_messages)
         if len(queues) == 1:
@@ -81,14 +79,6 @@ class MessagingClient:
         def _print(payload):
             print(payload.data)
 
-        def callback_wrapper(payload):
-            """Call user callback and send acknowledge."""
-            print("MessagingClient.consume_multiple().callback_wrapper()")
-            callback(payload)
-            payload.ack()
-
-        # TODO: Note that most aspects of the subscription path are hardcoded.
-        # It could be further generalized, but for now, we will merely cycle over subscriptions.
         subscription_names = [f"projects/{PROJECT_NAME}/subscriptions/{queue}" for queue in queues]
         subscribers = [pubsub_v1.SubscriberClient() for _ in subscription_names]
 
@@ -113,11 +103,12 @@ class MessagingClient:
             # as per the request.max_messages argument to subscriber.pull().
             for received_message in response.received_messages:
                 try:
-                    print(f"Received message on subscription '{subscription_name}': {received_message.message.data}.")
+                    logging.info(f"MessagingClient.consume_multiple() Received message on subscription '{subscription_name}': {received_message.message.data}.")
                     callback(received_message.message)
                     ack_ids.append(received_message.ack_id)
                 except Exception as exc:
                     # terminate on any exception so that the worker isn't hung.
+                    logging.info(f"MessagingClient.consume_multiple() Exception (will stop listening now): {exc}")
                     quit = True
                     break
             if quit:
@@ -127,13 +118,4 @@ class MessagingClient:
                 request={"subscription": subscription_name, "ack_ids": ack_ids}
             )
 
-
-            # Another possible approach
-            # flow_control = pubsub_v1.types.FlowControl(max_messages=max_messages)
-            # future = subscriber.subscribe(subscription_name, callback=callback_wrapper, flow_control=flow_control)
-            # try:
-            #     future.result(timeout=1)
-            # except Exception as exc:
-            #     # terminate on any exception so that the worker isn't hung.
-            #     future.cancel()
-            #     print(f"stopped listening: {exc}")
+        logging.info(f"stopped listening: {exc}")
