@@ -36,7 +36,7 @@ class MessagingClient:
             print(payload.data)
 
         def callback_wrapper(payload):
-            """Call user callback and send acknowledge."""]
+            """Call user callback and send acknowledge."""
             logging.info(f"MessagingClient.consume().callback_wrapper() Received message: {payload}.")
             callback(payload)
             payload.ack()
