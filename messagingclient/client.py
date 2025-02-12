@@ -28,7 +28,6 @@ class MessagingClient:
         return future.result(timeout=timeout)
 
     def consume(self, queue: str, callback: Callable = None, max_messages: int = 1):
-        
         if callback is None:
             callback = _print
 
@@ -37,7 +36,9 @@ class MessagingClient:
 
         def callback_wrapper(payload):
             """Call user callback and send acknowledge."""
-            logging.info(f"MessagingClient.consume().callback_wrapper() Received message: {payload}.")
+            logging.info(
+                f"MessagingClient.consume().callback_wrapper() Received message: {payload}."
+            )
             callback(payload)
             payload.ack()
 
@@ -52,40 +53,23 @@ class MessagingClient:
             except Exception as exc:
                 # terminate on any exception so that the worker isn't hung.
                 future.cancel()
-                logging.info(f"MessagingClient.consume() Exception (will stop listening now): {exc}")
+                logging.info(
+                    f"MessagingClient.consume() Exception (will stop listening now): {exc}"
+                )
 
-    def consume_multiple(self, queues: Union[str, List], callback: Callable = None, max_messages: int = 1):
-        '''
-        TODO: This function can completely replace consume() (i.e. be renamed consume(), deleting the older version),
-        but for development, I left the original consume() untouched and added this as a new function instead.
-        To avoid altering any code that currently calls consume(), the existing version could eventually be deleted
-        and this version could be renamed in its place.
-        
-        If one queue is provided, it will be consumed until the process is terminated.
-        If multiple queues are provided, they will be consumed in round robin fashion.
-
-        Refs:
-        https://cloud.google.com/pubsub/docs/pull
-        '''
-        
-        if isinstance(queues, str):
-            return self.consume(queues, callback, max_messages)
-        if len(queues) == 1:
-            return self.consume(queues[0], callback, max_messages)
-        
-        if callback is None:
-            callback = _print
-
-        def _print(payload):
-            print(payload.data)
-
-        subscription_names = [f"projects/{PROJECT_NAME}/subscriptions/{queue}" for queue in queues]
-        subscribers = [pubsub_v1.SubscriberClient() for _ in subscription_names]
-
+    def _consume_round_robin(
+        self,
+        subscribers: List[pubsub_v1.SubscriberClient],
+        subscription_names: List[str],
+        callback: Callable,
+    ):
         queue_index = 0
         quit = False
         while not quit:
-            subscriber, subscription_name = subscribers[queue_index], subscription_names[queue_index]
+            subscriber, subscription_name = (
+                subscribers[queue_index],
+                subscription_names[queue_index],
+            )
             queue_index = (queue_index + 1) % len(subscribers)
 
             response = subscriber.pull(
@@ -103,19 +87,58 @@ class MessagingClient:
             # as per the request.max_messages argument to subscriber.pull().
             for received_message in response.received_messages:
                 try:
-                    logging.info(f"MessagingClient.consume_multiple() Received message on subscription '{subscription_name}': {received_message.message.data}.")
+                    logging.info(
+                        f"MessagingClient.consume_multiple() Received message on subscription '{subscription_name}': {received_message.message.data}."
+                    )
                     callback(received_message.message)
                     ack_ids.append(received_message.ack_id)
                 except Exception as exc:
                     # terminate on any exception so that the worker isn't hung.
-                    logging.info(f"MessagingClient.consume_multiple() Exception (will stop listening now): {exc}")
+                    logging.info(
+                        f"MessagingClient.consume_multiple() Exception (will stop listening now): {exc}"
+                    )
                     quit = True
                     break
             if quit:
                 break
-            
+
             subscriber.acknowledge(
                 request={"subscription": subscription_name, "ack_ids": ack_ids}
             )
 
-        logging.info(f"stopped listening: {exc}")
+    def consume_multiple(
+        self, queues: Union[str, List], callback: Callable = None, max_messages: int = 1
+    ):
+        """
+        TODO: This function can completely replace consume() (i.e. be renamed consume(), deleting the older version),
+        but for development, I left the original consume() untouched and added this as a new function instead.
+        To avoid altering any code that currently calls consume(), the existing version could eventually be deleted
+        and this version could be renamed in its place.
+
+        If one queue is provided, it will be consumed until the process is terminated.
+        If multiple queues are provided, they will be consumed in round robin fashion.
+
+        Refs:
+        https://cloud.google.com/pubsub/docs/pull
+        """
+
+        if isinstance(queues, str):
+            return self.consume(queues, callback, max_messages)
+        if len(queues) == 1:
+            return self.consume(queues[0], callback, max_messages)
+
+        if callback is None:
+            callback = _print
+
+        def _print(payload):
+            print(payload.data)
+
+        subscription_names = [
+            f"projects/{PROJECT_NAME}/subscriptions/{queue}" for queue in queues
+        ]
+        subscribers = [pubsub_v1.SubscriberClient() for _ in subscription_names]
+
+        try:
+            self._consume_round_robin(subscribers, subscription_names, callback)
+        except Exception as exc:
+            logging.info(f"stopped listening: {exc}")
