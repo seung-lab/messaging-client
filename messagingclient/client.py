@@ -42,11 +42,7 @@ class MessagingClient:
             try:
                 payload.message.attributes["__subscription_name"] = queue
             except Exception as e:
-                print("MessagingClient.consume().callback_wrapper() Error adding subscription_name: ", e)
-            try:
-                payload.message.attributes["__delivery_attempt"] = payload.delivery_attempt
-            except Exception as e:
-                print("MessagingClient.consume().callback_wrapper() Error adding delivery_attempt: ", e)
+                logging.error("MessagingClient.consume().callback_wrapper() Error adding subscription_name to message: ", e)
             callback(payload)
             payload.ack()
 
@@ -101,11 +97,7 @@ class MessagingClient:
                     try:
                         received_message.message.attributes["__subscription_name"] = subscription_name
                     except Exception as e:
-                        print("MessagingClient._consume_round_robin() Error adding subscription_name: ", e)
-                    try:
-                        received_message.message.attributes["__delivery_attempt"] = received_message.message.delivery_attempt
-                    except Exception as e:
-                        print("MessagingClient._consume_round_robin() Error adding delivery_attempt: ", e)
+                        logging.error("MessagingClient._consume_round_robin() Error adding subscription_name to message: ", e)
                     callback(received_message.message)
                     ack_ids.append(received_message.ack_id)
                 except Exception as exc:
