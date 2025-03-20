@@ -103,7 +103,7 @@ class MessagingClient:
                     except Exception as e:
                         print("MessagingClient._consume_round_robin() Error adding subscription_name: ", e)
                     try:
-                        received_message.message.attributes["__delivery_attempt"] = received_message.delivery_attempt
+                        received_message.message.attributes["__delivery_attempt"] = received_message.message.delivery_attempt
                     except Exception as e:
                         print("MessagingClient._consume_round_robin() Error adding delivery_attempt: ", e)
                     callback(received_message.message)
