@@ -39,10 +39,7 @@ class MessagingClient:
             logging.info(
                 f"MessagingClient.consume().callback_wrapper() Received message: {payload}."
             )
-            try:
-                payload.message.attributes["__subscription_name"] = queue
-            except Exception as e:
-                logging.error("MessagingClient.consume().callback_wrapper() Error adding subscription_name to message: ", e)
+            payload.message.attributes["__subscription_name"] = queue
             callback(payload)
             payload.ack()
 
@@ -94,10 +91,7 @@ class MessagingClient:
                     logging.info(
                         f"MessagingClient.consume_multiple() Received message on subscription '{subscription_name}': {received_message.message.data}."
                     )
-                    try:
-                        received_message.message.attributes["__subscription_name"] = subscription_name
-                    except Exception as e:
-                        logging.error("MessagingClient._consume_round_robin() Error adding subscription_name to message: ", e)
+                    received_message.message.attributes["__subscription_name"] = subscription_name
                     callback(received_message.message)
                     ack_ids.append(received_message.ack_id)
                 except Exception as exc:
