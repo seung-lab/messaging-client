@@ -1,3 +1,4 @@
+from concurrent import futures
 import logging
 import time
 from typing import Any
@@ -11,23 +12,118 @@ from google.cloud import pubsub_v1
 PROJECT_NAME = getenv("PROJECT_NAME", "neuromancer-seung-import")
 
 
-class MessagingClient:
-    def __init__(self):
-        pass
+class MessagingClientPublisher:
+    """
+    This class is a wrapper around the Google Cloud Pub/Sub PublisherClient.
+    It allows for both single and batch message publishing.
+    The batch publisher is used by default, but if the batch size is set to 1,
+    the single message publisher is used instead, which avoids the futures complexity
+    and perfectly replicates the older single-message design.
+    """
+
+    class MessagingClientSinglePublisher:
+        """
+        Strictly speaking, this class is unnecessary since the batch publisher can be used for single messages,
+        but it is used by the batch publisher to perfectly replicate the older single-message design.
+        """
+        def publish(
+            self,
+            exchange: str,
+            payload: bytes,
+            attributes: dict = {},
+            timeout: Union[int, float] = None,
+        ) -> Any:
+            publisher = pubsub_v1.PublisherClient()
+            topic_name = f"projects/{PROJECT_NAME}/topics/{exchange}"
+            future = publisher.publish(topic_name, payload, **attributes)
+            return future.result(timeout=timeout)
+
+    def __init__(self, batch_size: int=1):
+        """
+        Args:
+            batch_size (int, optional): Number of messages to send in a single batch. Defaults to 1.
+        Ref:
+            https://cloud.google.com/pubsub/docs/batch-messaging
+        """
+        if batch_size < 1:
+            raise ValueError(
+                f"Invalid batch size: {batch_size}. Must be greater than 0."
+            )
+        elif batch_size == 1:
+            # Single-message publishing could readily be supported by the batch publisher,
+            # but it is a bit more efficient to use the single message publisher since it avoids all the futures complexity,
+            # and furthermore enhances backward compatilibity by perfectly preserving the original design.
+            self.publisher = MessagingClientPublisher.MessagingClientSinglePublisher()
+        elif batch_size > 1:
+            # We are in a multi-message, batch-publishing scenario
+            self.batch_settings = pubsub_v1.types.BatchSettings(
+                max_messages=batch_size,  # default 100
+                max_bytes=1024,  # default 1 MB
+                max_latency=1,  # default 10 ms
+            )
+            self.publisher = pubsub_v1.PublisherClient(self.batch_settings)
+            self.publish_future_timeouts = {}
+    
+    def callback(self, future):
+        """Callback to handle the result of the publish operation."""
+        try:
+            return future.result(timeout=self.publish_future_timeouts[future])
+        except Exception as exc:
+            logging.error(f"Publishing message failed: {exc}")
+        logging.info("Message published successfully.")
+        return None
+
+    def close(self, timeout: Union[int, float]=None):
+        """
+        Wait for all publish futures to complete and close the publisher client.
+        """
+        if not self.publisher:
+            logging.warning("Publisher client has already been closed.")
+            return
+        
+        if self.publish_future_timeouts:
+            logging.info("Waiting for publish futures to complete...")
+            futures.wait(
+                [future for future in self.publish_future_timeouts],
+                return_when=futures.ALL_COMPLETED, timeout=timeout)
+            for future in self.publish_future_timeouts:
+                try:
+                    future.result(timeout=timeout)
+                except Exception as exc:
+                    logging.error(f"Publishing message failed: {exc}")
+                else:
+                    logging.info("Message published successfully.")
+            self.publish_future_timeouts = {}
+        self.publisher.close()
+        self.publisher = None
 
     def publish(
         self,
         exchange: str,
         payload: bytes,
-        attributes: dict = {},
-        timeout: Union[int, float] = None,
+        attributes: dict={},
+        timeout: Union[int, float]=None,
     ) -> Any:
-        publisher = pubsub_v1.PublisherClient()
-        topic_name = f"projects/{PROJECT_NAME}/topics/{exchange}"
-        future = publisher.publish(topic_name, payload, **attributes)
-        return future.result(timeout=timeout)
+        if isinstance(self.publisher, MessagingClientPublisher.MessagingClientSinglePublisher):
+            # If the publisher is a single-message publisher, fall through to the older design
+            return self.publisher.publish(exchange, payload, attributes, timeout)
 
-    def consume(self, queue: str, callback: Callable = None, max_messages: int = 1):
+        # We are in a multi-message, batch-publishing scenario
+        if not self.publisher:
+            # If the publisher was previously closed, recreate it.
+            # This is an unlikely use case, as it shouldn't have been closed until it was no longer needed,
+            # but there is no harm in supporting such use if it arises.
+            logging.warning("Publisher client was previously closed. It will be recreated now.")
+            self.publisher = pubsub_v1.PublisherClient(self.batch_settings)
+            self.publish_future_timeouts = {}
+        
+        topic_name = f"projects/{PROJECT_NAME}/topics/{exchange}"
+        future = self.publisher.publish(topic_name, payload, **attributes)
+        future.add_done_callback(self.callback)
+        self.publish_future_timeouts[future] = timeout
+
+class MessagingClientConsumer:
+    def consume(self, queue: str, callback: Callable=None, max_messages: int=1):
         if callback is None:
             callback = _print
 
@@ -109,7 +205,7 @@ class MessagingClient:
             )
 
     def consume_multiple(
-        self, queues: Union[str, List], callback: Callable = None, max_messages: int = 1
+        self, queues: Union[str, List], callback: Callable = None, max_messages: int=1
     ):
         """
         TODO: This function can completely replace consume() (i.e. be renamed consume(), deleting the older version),
@@ -144,3 +240,39 @@ class MessagingClient:
             self._consume_round_robin(subscribers, subscription_names, callback)
         except Exception as exc:
             logging.info(f"stopped listening: {exc}")
+
+class MessagingClient:
+    """
+    This class merely exists for back compatibility with existing code that creates a "MessagingClient" object.
+    Future code should use the MessagingClientPublisher and MessagingClientConsumer classes directly.
+    """
+
+    def __init__(self):
+        # Since we don't know if this client will be used as a publisher or a consumer,
+        # we will lazily generate them when needed instead of wastefully front-loading both types in the ctor.
+        self.publisher = None
+        self.consumer = None
+
+    def publish(
+        self,
+        exchange: str,
+        payload: bytes,
+        attributes: dict={},
+        timeout: Union[int, float]=None,
+    ):
+        if not self.publisher:
+            # Hard code the publisher to single-message mode since that is the older design
+            self.publisher = MessagingClientPublisher(1)
+        return self.publisher.publish(exchange, payload, attributes, timeout)
+
+    def consume(self, queue: str, callback: Callable = None, max_messages: int=1):
+        if not self.consumer:
+            self.consumer = MessagingClientConsumer()
+        return self.consumer.consume(queue, callback, max_messages)
+    
+    def consume_multiple(   
+        self, queues: Union[str, List], callback: Callable = None, max_messages: int=1
+    ):
+        if not self.consumer:
+            self.consumer = MessagingClientConsumer()
+        return self.consumer.consume_multiple(queues, callback, max_messages)
