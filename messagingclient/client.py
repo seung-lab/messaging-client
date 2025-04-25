@@ -33,6 +33,9 @@ class MessagingClientPublisher:
             attributes: dict = {},
             timeout: Union[int, float] = None,
         ) -> Any:
+            logging.info(
+                f"MessagingClientPublisher.MessagingClientSinglePublisher.publish() Publishing message to exchange '{exchange}' with attributes {attributes}."
+            )
             publisher = pubsub_v1.PublisherClient()
             topic_name = f"projects/{PROJECT_NAME}/topics/{exchange}"
             future = publisher.publish(topic_name, payload, **attributes)
@@ -54,6 +57,9 @@ class MessagingClientPublisher:
             # but it is a bit more efficient to use the single message publisher since it avoids all the futures complexity,
             # and furthermore enhances backward compatilibity by perfectly preserving the original design.
             self.publisher = MessagingClientPublisher.MessagingClientSinglePublisher()
+            logging.info(
+                f"MessagingClientPublisher.__init__() Initialized single-message publisher."
+            )
         elif batch_size > 1:
             # We are in a multi-message, batch-publishing scenario
             self.batch_settings = pubsub_v1.types.BatchSettings(
@@ -63,26 +69,29 @@ class MessagingClientPublisher:
             )
             self.publisher = pubsub_v1.PublisherClient(self.batch_settings)
             self.publish_future_timeouts = {}
+            logging.info(
+                f"MessagingClientPublisher.__init__() Initialized batch-message publisher."
+            )
     
     def callback(self, future):
         """Callback to handle the result of the publish operation."""
         try:
             return future.result(timeout=self.publish_future_timeouts[future])
         except Exception as exc:
-            logging.error(f"Publishing message failed: {exc}")
-        logging.info("Message published successfully.")
+            logging.error(f"MessagingClient.callback() Publishing message failed: {exc}")
+        logging.info("MessagingClient.callback() Message published successfully.")
         return None
 
     def close(self, timeout: Union[int, float]=None):
         """
-        Wait for all publish futures to complete and close the publisher client.
+        Wait for all publish futures to complete.
         """
         if not self.publisher:
-            logging.warning("Publisher client has already been closed.")
+            logging.warning("MessagingClient.close() Publisher client has already been closed.")
             return
         
         if self.publish_future_timeouts:
-            logging.info("Waiting for publish futures to complete...")
+            logging.info("MessagingClient.close() Waiting for publish futures to complete...")
             futures.wait(
                 [future for future in self.publish_future_timeouts],
                 return_when=futures.ALL_COMPLETED, timeout=timeout)
@@ -90,11 +99,11 @@ class MessagingClientPublisher:
                 try:
                     future.result(timeout=timeout)
                 except Exception as exc:
-                    logging.error(f"Publishing message failed: {exc}")
+                    logging.error(f"MessagingClient.close() Publishing message failed: {exc}")
                 else:
-                    logging.info("Message published successfully.")
+                    logging.info("MessagingClient.close() Message published successfully.")
             self.publish_future_timeouts = {}
-        self.publisher.close()
+        
         self.publisher = None
 
     def publish(
@@ -104,6 +113,10 @@ class MessagingClientPublisher:
         attributes: dict={},
         timeout: Union[int, float]=None,
     ) -> Any:
+        logging.info(
+            f"MessagingClientPublisher.publish() Publishing message to exchange '{exchange}' with attributes {attributes}."
+        )
+        
         if isinstance(self.publisher, MessagingClientPublisher.MessagingClientSinglePublisher):
             # If the publisher is a single-message publisher, fall through to the older design
             return self.publisher.publish(exchange, payload, attributes, timeout)
@@ -113,7 +126,7 @@ class MessagingClientPublisher:
             # If the publisher was previously closed, recreate it.
             # This is an unlikely use case, as it shouldn't have been closed until it was no longer needed,
             # but there is no harm in supporting such use if it arises.
-            logging.warning("Publisher client was previously closed. It will be recreated now.")
+            logging.warning("MessagingClient.publish() Publisher client was previously closed. It will be recreated now.")
             self.publisher = pubsub_v1.PublisherClient(self.batch_settings)
             self.publish_future_timeouts = {}
         
@@ -185,7 +198,7 @@ class MessagingClientConsumer:
             for received_message in response.received_messages:
                 try:
                     logging.info(
-                        f"MessagingClient.consume_multiple() Received message on subscription '{subscription_name}': {received_message.message.data}."
+                        f"MessagingClient._consume_round_robin() Received message on subscription '{subscription_name}': {received_message.message.data}."
                     )
                     received_message.message.attributes["__subscription_name"] = subscription_name
                     callback(received_message.message)
@@ -193,7 +206,7 @@ class MessagingClientConsumer:
                 except Exception as exc:
                     # terminate on any exception so that the worker isn't hung.
                     logging.info(
-                        f"MessagingClient.consume_multiple() Exception (will stop listening now): {exc}"
+                        f"MessagingClient._consume_round_robin() Exception (will stop listening now): {exc}"
                     )
                     quit = True
                     break
@@ -239,7 +252,7 @@ class MessagingClientConsumer:
         try:
             self._consume_round_robin(subscribers, subscription_names, callback)
         except Exception as exc:
-            logging.info(f"stopped listening: {exc}")
+            logging.info(f"MessagingClient.consume_multiple() stopped listening: {exc}")
 
 class MessagingClient:
     """
