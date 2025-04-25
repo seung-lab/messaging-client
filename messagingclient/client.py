@@ -58,7 +58,7 @@ class MessagingClientPublisher:
             # and furthermore enhances backward compatilibity by perfectly preserving the original design.
             self.publisher = MessagingClientPublisher.MessagingClientSinglePublisher()
             logging.info(
-                f"MessagingClientPublisher.__init__() Initialized single-message publisher."
+                "MessagingClientPublisher.__init__() Initialized single-message publisher."
             )
         elif batch_size > 1:
             # We are in a multi-message, batch-publishing scenario
@@ -70,7 +70,7 @@ class MessagingClientPublisher:
             self.publisher = pubsub_v1.PublisherClient(self.batch_settings)
             self.publish_future_timeouts = {}
             logging.info(
-                f"MessagingClientPublisher.__init__() Initialized batch-message publisher."
+                f"MessagingClientPublisher.__init__() Initialized batch-message publisher for batches of size {batch_size}."
             )
     
     def callback(self, future):
@@ -88,6 +88,11 @@ class MessagingClientPublisher:
         """
         if not self.publisher:
             logging.warning("MessagingClientPublisher.close() Publisher client has already been closed.")
+            return
+        
+        if isinstance(self.publisher, MessagingClientPublisher.MessagingClientSinglePublisher):
+            # If the publisher is a single-message publisher, there is nothing to close
+            self.publisher = None
             return
         
         if self.publish_future_timeouts:
