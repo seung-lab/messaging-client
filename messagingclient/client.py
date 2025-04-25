@@ -87,11 +87,11 @@ class MessagingClientPublisher:
         Wait for all publish futures to complete.
         """
         if not self.publisher:
-            logging.warning("MessagingClient.close() Publisher client has already been closed.")
+            logging.warning("MessagingClientPublisher.close() Publisher client has already been closed.")
             return
         
         if self.publish_future_timeouts:
-            logging.info("MessagingClient.close() Waiting for publish futures to complete...")
+            logging.info("MessagingClientPublisher.close() Waiting for publish futures to complete...")
             futures.wait(
                 [future for future in self.publish_future_timeouts],
                 return_when=futures.ALL_COMPLETED, timeout=timeout)
@@ -99,9 +99,9 @@ class MessagingClientPublisher:
                 try:
                     future.result(timeout=timeout)
                 except Exception as exc:
-                    logging.error(f"MessagingClient.close() Publishing message failed: {exc}")
+                    logging.error(f"MessagingClientPublisher.close() Publishing message failed: {exc}")
                 else:
-                    logging.info("MessagingClient.close() Message published successfully.")
+                    logging.info("MessagingClientPublisher.close() Message published successfully.")
             self.publish_future_timeouts = {}
         
         self.publisher = None
@@ -126,7 +126,7 @@ class MessagingClientPublisher:
             # If the publisher was previously closed, recreate it.
             # This is an unlikely use case, as it shouldn't have been closed until it was no longer needed,
             # but there is no harm in supporting such use if it arises.
-            logging.warning("MessagingClient.publish() Publisher client was previously closed. It will be recreated now.")
+            logging.warning("MessagingClientPublisher.publish() Publisher client was previously closed. It will be recreated now.")
             self.publisher = pubsub_v1.PublisherClient(self.batch_settings)
             self.publish_future_timeouts = {}
         
@@ -146,7 +146,7 @@ class MessagingClientConsumer:
         def callback_wrapper(payload):
             """Call user callback and send acknowledge."""
             logging.info(
-                f"MessagingClient.consume().callback_wrapper() Received message: {payload}."
+                f"MessagingClientConsumer.consume().callback_wrapper() Received message: {payload}."
             )
             payload.message.attributes["__subscription_name"] = queue
             callback(payload)
@@ -164,7 +164,7 @@ class MessagingClientConsumer:
                 # terminate on any exception so that the worker isn't hung.
                 future.cancel()
                 logging.info(
-                    f"MessagingClient.consume() Exception (will stop listening now): {exc}"
+                    f"MessagingClientConsumer.consume() Exception (will stop listening now): {exc}"
                 )
 
     def _consume_round_robin(
@@ -198,7 +198,7 @@ class MessagingClientConsumer:
             for received_message in response.received_messages:
                 try:
                     logging.info(
-                        f"MessagingClient._consume_round_robin() Received message on subscription '{subscription_name}': {received_message.message.data}."
+                        f"MessagingClientConsumer._consume_round_robin() Received message on subscription '{subscription_name}': {received_message.message.data}."
                     )
                     received_message.message.attributes["__subscription_name"] = subscription_name
                     callback(received_message.message)
@@ -206,7 +206,7 @@ class MessagingClientConsumer:
                 except Exception as exc:
                     # terminate on any exception so that the worker isn't hung.
                     logging.info(
-                        f"MessagingClient._consume_round_robin() Exception (will stop listening now): {exc}"
+                        f"MessagingClientConsumer._consume_round_robin() Exception (will stop listening now): {exc}"
                     )
                     quit = True
                     break
@@ -252,7 +252,7 @@ class MessagingClientConsumer:
         try:
             self._consume_round_robin(subscribers, subscription_names, callback)
         except Exception as exc:
-            logging.info(f"MessagingClient.consume_multiple() stopped listening: {exc}")
+            logging.info(f"MessagingClientConsumer.consume_multiple() stopped listening: {exc}")
 
 class MessagingClient:
     """
