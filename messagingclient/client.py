@@ -48,11 +48,11 @@ class MessagingClientPublisher:
         Ref:
             https://cloud.google.com/pubsub/docs/batch-messaging
         """
-        if batch_size < 1:
+        if not isinstance(batch_size, int) or batch_size < 0:
             raise ValueError(
-                f"Invalid batch size: {batch_size}. Must be greater than 0."
+                f"Invalid batch size: {batch_size}. Must be an int >= 0 (where 0 implies no batch handling at all)."
             )
-        elif batch_size == 1:
+        elif batch_size == 0:
             # Single-message publishing could readily be supported by the batch publisher,
             # but it is a bit more efficient to use the single message publisher since it avoids all the futures complexity,
             # and furthermore enhances backward compatilibity by perfectly preserving the original design.
@@ -60,12 +60,12 @@ class MessagingClientPublisher:
             logging.info(
                 "MessagingClientPublisher.__init__() Initialized single-message publisher."
             )
-        elif batch_size > 1:
+        elif batch_size >= 1:
             # We are in a multi-message, batch-publishing scenario
             self.batch_settings = pubsub_v1.types.BatchSettings(
-                max_messages=batch_size,  # default 100
-                max_bytes=1024,  # default 1 MB
-                max_latency=1,  # default 10 ms
+                max_messages=batch_size,  # Messages, default 100
+                max_bytes=1024,  # Bytes, default 1 MB (1000000)
+                max_latency=1,  # Seconds, default 10 ms (.01)
             )
             self.publisher = pubsub_v1.PublisherClient(self.batch_settings)
             self.publish_future_timeouts = {}
