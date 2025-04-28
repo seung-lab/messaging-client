@@ -25,7 +25,7 @@ setuptools.setup(
     name="messagingclient",
     version=find_version("messagingclient", "__init__.py"),
     author="Akhilesh Halageri",
-    description="Messging Client",
+    description="Messaging Client",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/seung-lab/messaging-client",
