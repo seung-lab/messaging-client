@@ -153,7 +153,8 @@ class MessagingClientConsumer:
             logging.info(
                 f"MessagingClientConsumer.consume().callback_wrapper() Received message: {payload}."
             )
-            payload.message.attributes["__subscription_name"] = queue
+            msg = getattr(payload, 'message', payload)
+            msg.attributes["__subscription_name"] = queue
             callback(payload)
             payload.ack()
 
