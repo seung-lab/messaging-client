@@ -33,7 +33,7 @@ version = { attr = "messagingclient.__version__" }
 include = ["messagingclient*"]
 
 [tool.bumpversion]
-current_version = "0.3.0"
+current_version = "0.4.0"
 commit = true
 tag = true
 tag_name = "v{new_version}"
