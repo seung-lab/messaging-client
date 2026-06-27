@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=64", "setuptools_scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -26,22 +26,8 @@ dependencies = [
 Homepage = "https://github.com/seung-lab/messaging-client"
 "Bug Tracker" = "https://github.com/seung-lab/messaging-client/issues"
 
-[tool.setuptools.dynamic]
-version = { attr = "messagingclient.__version__" }
-
 [tool.setuptools.packages.find]
 include = ["messagingclient*"]
 
-[tool.bumpversion]
-current_version = "0.4.0"
-commit = true
-tag = true
-tag_name = "v{new_version}"
-
-[[tool.bumpversion.files]]
-filename = "messagingclient/__init__.py"
-
-[[tool.bumpversion.files]]
-filename = "pyproject.toml"
-search = 'current_version = "{current_version}"'
-replace = 'current_version = "{new_version}"'
+[tool.setuptools_scm]
+fallback_version = "0.4.0"
