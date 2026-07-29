@@ -1,5 +1,7 @@
 from concurrent import futures
+import contextlib
 import logging
+import signal
 import time
 from typing import Any
 from typing import Union, List
@@ -178,50 +180,109 @@ class MessagingClientConsumer:
         subscribers: List[pubsub_v1.SubscriberClient],
         subscription_names: List[str],
         callback: Callable,
-    ):
+        message_limit: int = 0,
+        idle_timeout: Union[int, float] = 0,
+    ) -> int:
+        """Synchronous pull loop over one or more subscriptions.
+
+        This is the single pull engine shared by ``consume_multiple`` (unbounded, N queues)
+        and ``consume_bounded`` (bounded/idle-exit, N queues).
+
+        Args:
+            subscribers (List[pubsub_v1.SubscriberClient]): list of SubscriberClient objects, one per subscription.
+            subscription_names (List[str]): list of subscription names, one per subscription.
+            callback (Callable): called with the ``PubsubMessage`` (has ``.data``/``.attributes``); the message is acknowledged after the callback returns.
+            message_limit (int): exit after this many messages are processed+acked. ``0`` = unbounded
+                (the original always-on behavior).
+            idle_timeout (Union[int, float]): exit after this many seconds with no message available across a full
+                round of the subscriptions. ``0`` = disabled.
+
+        Returns the number of messages processed. When either limit is set (i.e. a bounded
+        consumer), a SIGTERM handler is installed so pod termination finishes the in-flight
+        message and exits cleanly; unbounded callers keep the default SIGTERM behavior.
+        """
+        bounded = bool(message_limit) or bool(idle_timeout)
+        state = {"quit": False}
+        previous_handler = None
+        if bounded:
+            def _on_term(_signum, _frame):
+                logging.info(
+                    "MessagingClientConsumer._consume_round_robin() received SIGTERM; will exit after the current message."
+                )
+                state["quit"] = True
+
+            try:
+                previous_handler = signal.signal(signal.SIGTERM, _on_term)
+            except ValueError:
+                # signal handlers can only be installed on the main thread; skip otherwise.
+                previous_handler = None
+
+        processed = 0
+        last_message_time = time.monotonic()
         queue_index = 0
-        quit = False
-        while not quit:
-            subscriber, subscription_name = (
-                subscribers[queue_index],
-                subscription_names[queue_index],
-            )
-            queue_index = (queue_index + 1) % len(subscribers)
+        try:
+            while not state["quit"]:
+                subscriber, subscription_name = (
+                    subscribers[queue_index],
+                    subscription_names[queue_index],
+                )
+                wrapped_around = queue_index == len(subscribers) - 1
+                queue_index = (queue_index + 1) % len(subscribers)
 
-            response = subscriber.pull(
-                request={"subscription": subscription_name, "max_messages": 1},
-                retry=retry.Retry(deadline=300),
-            )
-            if len(response.received_messages) == 0:
-                # TODO: Do I need to add a brief sleep here before looping around and trying again
-                # or is it relatively self-throttling, say via the retry/deadline arguments to subscriber.pull()?
-                time.sleep(0.1)
-                continue
+                response = subscriber.pull(
+                    request={"subscription": subscription_name, "max_messages": 1},
+                    retry=retry.Retry(deadline=300),
+                )
+                if len(response.received_messages) == 0:
+                    # Only consider idling once we've checked every subscription this round.
+                    if idle_timeout and wrapped_around and (
+                        time.monotonic() - last_message_time
+                    ) >= idle_timeout:
+                        logging.info(
+                            f"MessagingClientConsumer._consume_round_robin() idle for {idle_timeout}s; exiting."
+                        )
+                        break
+                    time.sleep(0.1)
+                    continue
 
-            ack_ids = []
-            # This for-loop is overkill. There really should only be only one message,
-            # as per the request.max_messages argument to subscriber.pull().
-            for received_message in response.received_messages:
-                try:
-                    logging.info(
-                        f"MessagingClientConsumer._consume_round_robin() Received message on subscription '{subscription_name}': {received_message.message.data}."
-                    )
-                    received_message.message.attributes["__subscription_name"] = subscription_name
-                    callback(received_message.message)
-                    ack_ids.append(received_message.ack_id)
-                except Exception as exc:
-                    # terminate on any exception so that the worker isn't hung.
-                    logging.info(
-                        f"MessagingClientConsumer._consume_round_robin() Exception (will stop listening now): {exc}"
-                    )
-                    quit = True
+                ack_ids = []
+                stop = False
+                # There should only be one message per pull (max_messages=1).
+                for received_message in response.received_messages:
+                    try:
+                        logging.info(
+                            f"MessagingClientConsumer._consume_round_robin() Received message on subscription '{subscription_name}': {received_message.message.data}."
+                        )
+                        received_message.message.attributes["__subscription_name"] = subscription_name
+                        callback(received_message.message)
+                        ack_ids.append(received_message.ack_id)
+                    except Exception as exc:
+                        # terminate on any exception so that the worker isn't hung; do NOT
+                        # ack -> Pub/Sub redelivers the message.
+                        logging.info(
+                            f"MessagingClientConsumer._consume_round_robin() Exception (will stop listening now): {exc}"
+                        )
+                        stop = True
+                        break
+                if stop:
                     break
-            if quit:
-                break
 
-            subscriber.acknowledge(
-                request={"subscription": subscription_name, "ack_ids": ack_ids}
-            )
+                subscriber.acknowledge(
+                    request={"subscription": subscription_name, "ack_ids": ack_ids}
+                )
+                processed += len(ack_ids)
+                last_message_time = time.monotonic()
+
+                if message_limit and processed >= message_limit:
+                    logging.info(
+                        f"MessagingClientConsumer._consume_round_robin() processed {processed}/{message_limit} message(s); exiting."
+                    )
+                    break
+        finally:
+            if bounded and previous_handler is not None:
+                signal.signal(signal.SIGTERM, previous_handler)
+
+        return processed
 
     def consume_multiple(
         self, queues: Union[str, List], callback: Callable = None, max_messages: int=1
@@ -260,6 +321,59 @@ class MessagingClientConsumer:
         except Exception as exc:
             logging.info(f"MessagingClientConsumer.consume_multiple() stopped listening: {exc}")
 
+    def consume_bounded(
+        self,
+        queues: Union[str, List],
+        callback: Callable = None,
+        message_limit: int = 0,
+        idle_timeout: Union[int, float] = 0,
+    ) -> int:
+        """Consume one or more queues but exit after a bounded amount of work.
+
+        Thin wrapper over ``_consume_round_robin`` (the shared pull engine). Unlike
+        ``consume()`` (a streaming subscriber that blocks forever), this pulls one message at
+        a time and returns once a limit is reached, so a pod running it does a bounded chunk
+        of work and exits -- which is what a KEDA ScaledJob wants (one Job per N messages,
+        launched from queue backlog).
+
+        Args:
+            queues: a single subscription name (str) or a list of them (short form). A list is
+                consumed round-robin, with the limits counted across all of them.
+            callback: called with the ``PubsubMessage`` (has ``.data``/``.attributes``); the
+                message is acknowledged after the callback returns.
+            message_limit: exit after this many messages (total across all queues) are
+                processed+acked. ``0`` = unbounded.
+            idle_timeout: exit after this many seconds with no message available from any
+                queue. ``0`` = disabled.
+
+        Returns the number of messages processed. A SIGTERM handler is installed (by the
+        engine) so pod termination finishes the in-flight message and exits cleanly; on a
+        callback exception the message is left unacked so Pub/Sub + the Job's backoffLimit
+        retry it.
+        """
+        if callback is None:
+            def callback(payload):
+                print(payload.data)
+
+        if isinstance(queues, str):
+            queues = [queues]
+        subscription_names = [
+            f"projects/{PROJECT_NAME}/subscriptions/{queue}" for queue in queues
+        ]
+        with contextlib.ExitStack() as stack:
+            subscribers = [
+                stack.enter_context(pubsub_v1.SubscriberClient())
+                for _ in subscription_names
+            ]
+            return self._consume_round_robin(
+                subscribers,
+                subscription_names,
+                callback,
+                message_limit=message_limit,
+                idle_timeout=idle_timeout,
+            )
+
+
 class MessagingClient:
     """
     This class merely exists for back compatibility with existing code that creates a "MessagingClient" object.
@@ -289,9 +403,20 @@ class MessagingClient:
             self.consumer = MessagingClientConsumer()
         return self.consumer.consume(queue, callback, max_messages)
     
-    def consume_multiple(   
+    def consume_multiple(
         self, queues: Union[str, List], callback: Callable = None, max_messages: int=1
     ):
         if not self.consumer:
             self.consumer = MessagingClientConsumer()
         return self.consumer.consume_multiple(queues, callback, max_messages)
+
+    def consume_bounded(
+        self,
+        queues: Union[str, List],
+        callback: Callable = None,
+        message_limit: int = 0,
+        idle_timeout: Union[int, float] = 0,
+    ) -> int:
+        if not self.consumer:
+            self.consumer = MessagingClientConsumer()
+        return self.consumer.consume_bounded(queues, callback, message_limit, idle_timeout)
