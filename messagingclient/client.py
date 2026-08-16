@@ -11,6 +11,21 @@ from os import getenv
 from google.api_core import retry
 from google.cloud import pubsub_v1
 
+
+class RetryableError(Exception):
+    """Raise from a callback to return the message to the subscription for redelivery.
+
+    The consume loop treats any other exception as fatal: it stops consuming so the worker
+    cannot silently spin on a broken message. That is the right default, but it leaves a
+    callback no way to say "this particular message failed for a transient reason -- give it
+    back and carry on", so callbacks that wanted to keep consuming had to swallow their errors,
+    which acks the message and drops the work.
+
+    Raising this instead nacks the message (ack deadline set to 0, so the subscription
+    redelivers per its retry policy) and continues the loop. Use it for transient conditions
+    such as HTTP 429 or 503 from a downstream service; let anything else propagate.
+    """
+
 PROJECT_NAME = getenv("PROJECT_NAME", "neuromancer-seung-import")
 
 
@@ -256,6 +271,30 @@ class MessagingClientConsumer:
                         received_message.message.attributes["__subscription_name"] = subscription_name
                         callback(received_message.message)
                         ack_ids.append(received_message.ack_id)
+                    except RetryableError as exc:
+                        # The callback asked for this message to be redelivered. Nack it by
+                        # zeroing its ack deadline (the subscription's retry policy governs how
+                        # soon it comes back) and keep consuming -- unlike the fatal path below,
+                        # a transient downstream failure should not take the worker out.
+                        logging.warning(
+                            f"MessagingClientConsumer._consume_round_robin() Retryable failure on "
+                            f"'{subscription_name}', returning message for redelivery: {exc}"
+                        )
+                        try:
+                            subscriber.modify_ack_deadline(
+                                request={
+                                    "subscription": subscription_name,
+                                    "ack_ids": [received_message.ack_id],
+                                    "ack_deadline_seconds": 0,
+                                }
+                            )
+                        except Exception as nack_exc:
+                            # Failing to nack only means we wait out the ack deadline instead of
+                            # being redelivered promptly; the message is still not acked.
+                            logging.warning(
+                                f"MessagingClientConsumer._consume_round_robin() could not nack: {nack_exc}"
+                            )
+                        continue
                     except Exception as exc:
                         # terminate on any exception so that the worker isn't hung; do NOT
                         # ack -> Pub/Sub redelivers the message.
