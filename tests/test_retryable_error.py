@@ -51,10 +51,17 @@ class FakeSubscriber:
         self.nacked.extend(request["ack_ids"])
 
 
-def _run(subscriber, callback, message_limit):
+def _run(subscriber, callback, message_limit=0, idle_timeout=0.3):
+    """Drive the loop over a scripted subscriber.
+
+    idle_timeout is the exit condition, not message_limit: a nacked message is never acked, so
+    `processed` does not advance and a message_limit alone would spin forever once the script is
+    exhausted. Real (short) sleeps are used so the idle clock actually advances.
+    """
     consumer = MessagingClientConsumer.__new__(MessagingClientConsumer)
     return consumer._consume_round_robin(
-        [subscriber], ["projects/p/subscriptions/s"], callback, message_limit=message_limit
+        [subscriber], ["projects/p/subscriptions/s"], callback,
+        message_limit=message_limit, idle_timeout=idle_timeout,
     )
 
 
@@ -65,8 +72,7 @@ class TestRetryableError:
         def cb(_msg):
             raise RetryableError("HTTP 429")
 
-        with mock.patch("time.sleep"):
-            _run(sub, cb, message_limit=1)
+        _run(sub, cb)
 
         assert sub.nacked == ["ack-1"], "message should be returned for redelivery"
         assert sub.acked == [], "a failed message must not be acked"
@@ -81,8 +87,7 @@ class TestRetryableError:
             if len(seen) == 1:
                 raise RetryableError("HTTP 429")
 
-        with mock.patch("time.sleep"):
-            _run(sub, cb, message_limit=1)
+        _run(sub, cb)
 
         assert len(seen) == 2, "consumer stopped after the retryable failure"
         assert sub.nacked == ["ack-1"]
@@ -91,8 +96,7 @@ class TestRetryableError:
     def test_success_acks_as_before(self):
         sub = FakeSubscriber([[FakeReceived("ack-1")]])
 
-        with mock.patch("time.sleep"):
-            _run(sub, lambda _m: None, message_limit=1)
+        _run(sub, lambda _m: None)
 
         assert sub.acked == ["ack-1"]
         assert sub.nacked == []
@@ -106,8 +110,7 @@ class TestRetryableError:
             seen.append(1)
             raise ValueError("structural")
 
-        with mock.patch("time.sleep"):
-            _run(sub, cb, message_limit=5)
+        _run(sub, cb)
 
         assert len(seen) == 1, "should have stopped after the fatal error"
         assert sub.acked == []
@@ -124,8 +127,7 @@ class TestRetryableError:
             if len(seen) == 1:
                 raise RetryableError("HTTP 503")
 
-        with mock.patch("time.sleep"):
-            _run(sub, cb, message_limit=1)
+        _run(sub, cb)
 
         assert len(seen) == 2, "a failed nack must not stop the consumer"
         assert sub.acked == ["ack-2"]
