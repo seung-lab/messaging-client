@@ -306,11 +306,26 @@ class MessagingClientConsumer:
                 if stop:
                     break
 
+                # A message was delivered even if it was nacked rather than acked, so the idle
+                # clock restarts either way; otherwise a subscription serving nothing but retryable
+                # failures would look idle and a bounded consumer would exit.
+                if response.received_messages:
+                    last_message_time = time.monotonic()
+
+                # acknowledge() rejects an empty ack_ids list with
+                # "400 You have not specified an ack ID", so only call it when something was acked.
+                # With max_messages=1 a single retryable failure leaves this list empty: the
+                # RetryableError branch nacks and continues, the for loop ends, and `stop` is False.
+                # Before this guard that raised InvalidArgument out of the pull loop, which
+                # consume_multiple swallowed at INFO -- so every retryable failure quietly took the
+                # worker out of service instead of returning one message for redelivery.
+                if not ack_ids:
+                    continue
+
                 subscriber.acknowledge(
                     request={"subscription": subscription_name, "ack_ids": ack_ids}
                 )
                 processed += len(ack_ids)
-                last_message_time = time.monotonic()
 
                 if message_limit and processed >= message_limit:
                     logging.info(

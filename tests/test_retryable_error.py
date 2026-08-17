@@ -44,6 +44,11 @@ class FakeSubscriber:
         return FakeResponse([])
 
     def acknowledge(self, request=None, **kw):
+        # The real API rejects an empty list with "400 You have not specified an ack ID". The fake
+        # used to accept it, which is why a nack-only round looked fine here while crashing the
+        # pull loop in production.
+        if not request["ack_ids"]:
+            raise AssertionError("acknowledge() called with no ack IDs")
         self.acked.extend(request["ack_ids"])
 
     def modify_ack_deadline(self, request=None, **kw):
